@@ -97,9 +97,13 @@ final class PetController: ObservableObject {
         idlePhase += tick
         idleRemaining -= tick
 
-        // Flottement lent.
+        // Flottement lent + léger balancement latéral : jamais parfaitement figée.
         let float = CGFloat(sin(idlePhase * 1.6) * 3)
-        window.setFrameOrigin(NSPoint(x: restX, y: restY + float))
+        let sway = CGFloat(sin(idlePhase * 0.9) * 2.5)
+        window.setFrameOrigin(NSPoint(x: restX + sway, y: restY + float))
+
+        // Respiration procédurale (remplace l'ex-animation SwiftUI repeatForever).
+        squashY = 1 + 0.018 * sin(idlePhase * 1.5)
 
         // Gestion des émotions ponctuelles.
         if emoteRemaining > 0 {
@@ -122,17 +126,18 @@ final class PetController: ObservableObject {
         default: emotePose = .clinDoeil; emoteRemaining = 0.45
         }
         pose = emotePose
-        nextEmoteIn = Double.random(in: 3.5...7.0)
+        nextEmoteIn = Double.random(in: 2.5...5.5)
     }
 
-    /// À la fin d'une plage de repos, on choisit la suite : rester debout,
-    /// s'asseoir, dormir, ou partir se balader.
+    /// À la fin d'une plage de repos, on choisit la suite. Biaisé vers le
+    /// mouvement : elle se balade la plupart du temps, s'assoit brièvement de
+    /// temps en temps, et ne dort que rarement.
     private func chooseNextIdleBehavior() {
         switch Int.random(in: 0..<100) {
-        case 0..<45:  beginWander()                       // se balade
-        case 45..<70: enterIdle(duration: Double.random(in: 3...6))
-        case 70..<90: enterRest(.sitting, Double.random(in: 5...12))
-        default:      enterRest(.sleeping, Double.random(in: 8...20))
+        case 0..<68:  beginWander()                       // se balade (souvent)
+        case 68..<82: enterIdle(duration: Double.random(in: 1.5...3))
+        case 82..<95: enterRest(.sitting, Double.random(in: 3...7))
+        default:      enterRest(.sleeping, Double.random(in: 6...12))
         }
     }
 
@@ -161,15 +166,16 @@ final class PetController: ObservableObject {
 
     private func updateResting(_ window: NSWindow, restPose: GoatPose) {
         stateRemaining -= tick
-        // Respiration très légère pour le dodo (haut/bas imperceptible).
+        idlePhase += tick
+        // Respiration très légère au repos (procédurale, sans animation SwiftUI).
+        squashY = 1 + 0.012 * sin(idlePhase * 1.1)
         if restPose == .couche {
             let breathe = CGFloat(sin(idlePhase * 1.1) * 1.2)
-            idlePhase += tick
             window.setFrameOrigin(NSPoint(x: restX, y: restY + breathe))
         }
         if stateRemaining <= 0 {
-            // « Se lève » : petite pause debout avant de reprendre.
-            enterIdle(duration: Double.random(in: 1.5...3.0))
+            // « Se lève » : brève pause debout avant de repartir.
+            enterIdle(duration: Double.random(in: 1.0...2.0))
         }
     }
 
@@ -190,7 +196,9 @@ final class PetController: ObservableObject {
         let targetX = min(max(restX + CGFloat.random(in: -420...420), minX), maxX)
         let targetY = min(max(restY + CGFloat.random(in: -260...260), minY), maxY)
 
-        startX = restX; startY = restY
+        // On part de la position RÉELLE (flottement/balancement inclus), pas de
+        // l'ancre de repos : évite un petit saut au premier pas.
+        startX = window.frame.origin.x; startY = window.frame.origin.y
         distX = targetX - startX; distY = targetY - startY
 
         let dist = hypot(distX, distY)
@@ -234,7 +242,7 @@ final class PetController: ObservableObject {
             restY = startY + distY
             window.setFrameOrigin(NSPoint(x: restX, y: restY))
             tilt = 0
-            enterIdle(duration: Double.random(in: 2.5...6))
+            enterIdle(duration: Double.random(in: 1.2...3))
         }
     }
 
@@ -286,7 +294,12 @@ final class PetController: ObservableObject {
     /// est le déplacement cumulé depuis le début du geste (repère SwiftUI, y bas).
     func handleDragChanged(_ translation: CGSize) {
         guard let window else { return }
+        // On n'entre en mode déplacement qu'au-delà d'un vrai mouvement. Sinon un
+        // simple clic (minimumDistance 0 → onChanged avec translation ~0) mettrait
+        // isDragging à vrai et, la branche « tap » de onEnded ne le remettant pas à
+        // faux, figerait définitivement la boucle (guard !isDragging dans update()).
         if dragOrigin == nil {
+            guard hypot(translation.width, translation.height) >= 5 else { return }
             dragOrigin = window.frame.origin
             isDragging = true
             pose = .heureux            // elle apprécie qu'on la porte

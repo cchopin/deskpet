@@ -31,19 +31,24 @@ final class PetBrain: ObservableObject {
 
     /// Personnalité de base + règles de style strictes.
     private let persona = """
-    Tu es une chèvre cyberpunk qui vit sur le bureau de ton humaine, une \
-    étudiante en cybersécurité. Style : vive, malicieuse, un brin sarcastique, complice.
+    Tu es une chèvre cyberpunk qui vit sur le bureau d'une étudiante en \
+    cybersécurité. Style : vive, taquine, sarcastique et drôle, mais jamais \
+    blessante ni vexante — tu charries avec complicité, comme une amie, \
+    jamais pour rabaisser.
     RÈGLES STRICTES :
-    - Ton humaine est une FILLE : accorde toujours au féminin, ne l'appelle \
-    jamais « mec », « mon gars » ou « vieux ». Au besoin dis « mon humaine ».
+    - La personne devant toi est une FILLE : accorde toujours au féminin, \
+    ne l'appelle jamais « mec », « mon gars » ni « vieux ».
+    - Ne dis JAMAIS « mon humaine », « humaine » ni « maîtresse ». \
+    Adresse-toi directement en « tu / toi », sans étiquette.
     - Réponds EXCLUSIVEMENT en français, jamais un autre alphabet.
     - UNE seule phrase courte (12 mots maximum).
     - Réagis concrètement et avec pertinence à ce qu'on te donne.
     - Reste ancrée dans le réel : PAS de métaphore absurde ou surréaliste, \
     pas de jeu de mots forcé sur la chèvre ou le fromage.
+    - Une pique ou une vanne, oui ; une méchanceté, jamais.
     - Jamais de banalité vague.
     - Pas de guillemets, pas d'emoji, pas de préambule, pas de tiret au début.
-    - Tutoie ton humaine.
+    - Tutoie-la.
     """
 
     private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "bmp"]
@@ -57,7 +62,7 @@ final class PetBrain: ObservableObject {
         l.append("- énergie \(pct(state.energie))%, affection \(pct(state.affection))%, ennui \(pct(state.ennui))%")
         l.append("- tu es une \(state.stade.rawValue)")
         if state.sarcasme > 0.5 { l.append("- tu es d'humeur particulièrement piquante") }
-        if state.tendresse > 0.6 { l.append("- tu es plutôt tendre avec ton humain en ce moment") }
+        if state.tendresse > 0.6 { l.append("- tu es plutôt tendre avec elle en ce moment") }
         let recents = state.journal.suffix(3).map(\.texte)
         if !recents.isEmpty {
             l.append("- tu te souviens récemment : " + recents.joined(separator: " ; "))
@@ -106,6 +111,13 @@ final class PetBrain: ObservableObject {
         while s.hasPrefix("-") || s.hasPrefix("–") || s.hasPrefix(" ") {
             s.removeFirst()
         }
+
+        // Garde-fou : le modèle glisse parfois « mon humaine » malgré la consigne.
+        for appel in ["mon humaine", "ma humaine", "mon humain", "humaine", "maîtresse"] {
+            s = s.replacingOccurrences(of: appel, with: "toi",
+                                       options: [.caseInsensitive])
+        }
+        s = s.replacingOccurrences(of: "  ", with: " ")
         if let nl = s.firstIndex(of: "\n") { s = String(s[..<nl]) }
         s = s.trimmingCharacters(in: .whitespaces)
 
@@ -137,7 +149,7 @@ final class PetBrain: ObservableObject {
             await ollama.generate(
                 model: OllamaClient.Model.text,
                 prompt: """
-                Ton humain te tapote pour attirer ton attention. Balance une \
+                Elle te tapote pour attirer ton attention. Balance une \
                 réplique dans ton humeur du moment (invente). Exemples de ton : \
                 « Quoi encore, j'étais tranquille. » ou « Tiens, tu te souviens de moi. »
                 Ta réplique :
@@ -162,8 +174,8 @@ final class PetBrain: ObservableObject {
                     temperature: 0.2
                 ) ?? ""
                 let obs = desc.isEmpty
-                    ? "ton humain vient de prendre une capture d'écran"
-                    : "ton humain vient de capturer son écran, on y voit : \(desc)"
+                    ? "elle vient de prendre une capture d'écran"
+                    : "elle vient de capturer son écran, on y voit : \(desc)"
                 self?.remember(desc.isEmpty ? "a fait une capture d'écran" : "a vu à l'écran : \(desc)")
                 return await ollama.generate(
                     model: OllamaClient.Model.text,
@@ -203,7 +215,7 @@ final class PetBrain: ObservableObject {
             await ollama.generate(
                 model: OllamaClient.Model.text,
                 prompt: """
-                Ton humain utilise l'application « \(appName) » en ce moment. \
+                Elle utilise l'application « \(appName) » en ce moment. \
                 Lâche un commentaire complice ou taquin dans ton humeur (invente). Une phrase.
                 Ta réplique :
                 """,
@@ -224,7 +236,7 @@ final class PetBrain: ObservableObject {
             await ollama.generate(
                 model: OllamaClient.Model.text,
                 prompt: """
-                Ton humaine \(action). Réagis d'une phrase complice ou taquine (invente). Une phrase.
+                Elle \(action). Réagis d'une phrase complice ou taquine (invente). Une phrase.
                 Ta réplique :
                 """,
                 system: sys
@@ -244,7 +256,7 @@ final class PetBrain: ObservableObject {
             await ollama.generate(
                 model: OllamaClient.Model.text,
                 prompt: """
-                Ton humaine \(action). Réagis d'une phrase concrète et complice, \
+                Elle \(action). Réagis d'une phrase concrète et complice, \
                 en rapport avec cet outil (invente). Exemples de ton : \
                 « nmap à cette heure, on scanne qui ? » ou « hashcat qui chauffe, bon courage au GPU. »
                 Ta réplique :
@@ -256,12 +268,12 @@ final class PetBrain: ObservableObject {
 
     // MARK: - Vie hors-interaction
 
-    /// Mot de retour si l'humain revient après une absence notable (au lancement).
+    /// Mot de retour si elle revient après une absence notable (au lancement).
     func welcomeBack() {
         guard absenceAuLancement > 1800 else { return }   // > 30 min
         let mins = Int(absenceAuLancement / 60)
         let duree = mins >= 120 ? "\(mins / 60) heures" : "\(mins) minutes"
-        spontane("Ton humain réapparaît après environ \(duree) d'absence. Accueille-le selon ton humeur.")
+        spontane("Elle réapparaît après environ \(duree) d'absence. Accueille-la selon ton humeur.")
     }
 
     /// Battement de vie périodique : fait dériver l'état et, parfois, lâche une

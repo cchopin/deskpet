@@ -8,8 +8,6 @@ struct CreatureView: View {
     @ObservedObject var controller: PetController
     var onTap: () -> Void = {}
 
-    @State private var breathing = false
-
     private let cyan = Color(red: 0.16, green: 0.94, blue: 1.00)
 
     var body: some View {
@@ -29,11 +27,12 @@ struct CreatureView: View {
                 .interpolation(.high)
                 .scaledToFit()
                 .frame(width: 176, height: 176)
-                // Respiration subtile au repos uniquement.
-                .scaleEffect(breathing && !controller.isWalking ? 1.02 : 0.99, anchor: .bottom)
-                .animation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true),
-                           value: breathing)
-                // Squash & stretch (ancré aux pieds), volume conservé.
+                // AUCUNE animation SwiftUI implicite ici : tout le mouvement
+                // (respiration, squash & stretch, dandinement) est piloté image
+                // par image par la boucle 60 fps du controller. Une animation
+                // `repeatForever` laisserait une transaction active en permanence,
+                // qui capturerait le changement de sprite et ferait un fondu
+                // enchaîné — d'où l'ancien fantôme superposé au nouveau.
                 .scaleEffect(x: 1 / CGFloat(controller.squashY),
                              y: CGFloat(controller.squashY), anchor: .bottom)
                 .rotationEffect(.degrees(controller.tilt), anchor: .bottom)
@@ -47,11 +46,12 @@ struct CreatureView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { controller.handleDragChanged($0.translation) }
-                .onEnded { value in
-                    let moved = hypot(value.translation.width, value.translation.height)
-                    if moved < 5 { onTap() } else { controller.handleDragEnded() }
+                .onEnded { _ in
+                    // Un vrai déplacement a eu lieu → on le termine proprement
+                    // (réinitialise isDragging). Sinon c'était un simple tap.
+                    if controller.isDragging { controller.handleDragEnded() }
+                    else { onTap() }
                 }
         )
-        .onAppear { breathing = true }
     }
 }
