@@ -23,21 +23,23 @@ et dont l'humeur évolue avec le temps et au fil des interactions.
   et réaction au retour après une absence.
 - **Observation de l'activité** (4 niveaux) :
   1. Nouveaux fichiers sur le Bureau / Téléchargements
-  2. Captures d'écran (analysées par un modèle de vision)
+  2. Captures d'écran et images déposées
   3. Application au premier plan + ouverture / fermeture d'applications
   4. Lancement / arrêt d'outils en ligne de commande (nmap, docker, hashcat…)
+
+  À chaque événement, la chèvre pioche parmi **1910 répliques scriptées**, choisies
+  selon la situation, son humeur *et* l'heure qu'il est (faim vers midi, coup de
+  mou l'après-midi, bâillements le soir) — instantané et léger, sans modèle local.
+  Un sélecteur anti-répétition écarte les 80 dernières répliques servies.
 - **Synchronisation multi-Macs** : la mémoire et l'état sont écrits dans iCloud
   Drive ; la même chèvre est disponible sur chaque Mac.
 
 ## Prérequis
 
 - macOS 14+ et **Swift** (les Command Line Tools suffisent : `xcode-select --install`)
-- [Ollama](https://ollama.com) avec deux modèles, et le serveur lancé :
-  ```sh
-  ollama pull qwen2.5:14b   # texte (ou qwen2.5:7b sur une machine plus légère)
-  ollama pull moondream     # vision
-  ollama serve
-  ```
+
+Aucune dépendance externe : les répliques sont scriptées, il n'y a plus de
+modèle local à installer ni de serveur à lancer.
 
 ## Lancer
 
@@ -74,7 +76,13 @@ Ce fichier n'est **jamais** versionné.
 |---|---|
 | `PetController.swift` | Déplacement, machine à états d'animation, squash & stretch |
 | `CreatureView.swift` / `GoatSprite.swift` | Rendu des sprites |
-| `PetBrain.swift` | Personnalité, répliques, réactions |
+| `PetBrain.swift` | Personnalité, aiguillage des réactions, humeur |
+| `ScriptedLines.swift` | Mécanique des répliques : anti-répétition, humeurs, tranches horaires |
+| `LinesPoke.swift` | Réactions au clic, déclinées par humeur (175) |
+| `LinesTimeOfDay.swift` | Répliques selon le moment de la journée (200) |
+| `LinesFiles.swift` | Réactions aux fichiers apparus sur le bureau (242) |
+| `LinesTools.swift` | Réactions aux outils sécu / dev lancés ou arrêtés (380) |
+| `LinesApps.swift` / `LinesAppsWork.swift` | Réactions aux applications, perso et pro (813) |
+| `LinesLife.swift` | Retour après absence, ennui, fatigue (100) |
 | `PetState.swift` | État persistant (jauges, mémoire, croissance) + sync iCloud |
 | `DesktopWatcher.swift` / `ProcessWatcher.swift` | Observation fichiers & process |
-| `OllamaClient.swift` | Accès à Ollama (texte + vision) |

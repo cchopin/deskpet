@@ -4,15 +4,19 @@ import SwiftUI
 /// et réactions déclenchées par les clics, les fichiers et l'app active.
 ///
 /// La personnalité n'est plus figée : l'humeur, les jauges et la mémoire de
-/// `state` sont injectées dans le prompt à chaque réplique, et les événements
-/// font dériver cet état (qui est persisté puis, plus tard, synchronisé iCloud).
+/// `state` teintent le CHOIX des répliques à chaque événement, et les événements
+/// font dériver cet état (persisté puis, plus tard, synchronisé iCloud).
+///
+/// Les répliques sont désormais SCRIPTÉES (voir `ScriptedLines`) et non plus
+/// générées par un modèle local : instantané, léger, et calibré au ton voulu.
 @MainActor
 final class PetBrain: ObservableObject {
     @Published var speech: String? = nil
+    /// Conservé pour l'UI (SpeechBubble) : le scripté étant instantané, on ne
+    /// passe plus jamais par un état « réfléchit ».
     @Published var thinking: Bool = false
 
-    private let ollama = OllamaClient()
-    private var busy = false
+    private var picker = ScriptedLines.Picker()
     private var hideWork: DispatchWorkItem?
 
     // « L'âme » persistée.
@@ -29,46 +33,11 @@ final class PetBrain: ObservableObject {
         state = s
     }
 
-    /// Personnalité de base + règles de style strictes.
-    private let persona = """
-    Tu es une chèvre cyberpunk qui vit sur le bureau d'une étudiante en \
-    cybersécurité. Style : vive, taquine, sarcastique et drôle, mais jamais \
-    blessante ni vexante — tu charries avec complicité, comme une amie, \
-    jamais pour rabaisser.
-    RÈGLES STRICTES :
-    - La personne devant toi est une FILLE : accorde toujours au féminin, \
-    ne l'appelle jamais « mec », « mon gars » ni « vieux ».
-    - Ne dis JAMAIS « mon humaine », « humaine » ni « maîtresse ». \
-    Adresse-toi directement en « tu / toi », sans étiquette.
-    - Réponds EXCLUSIVEMENT en français, jamais un autre alphabet.
-    - UNE seule phrase courte (12 mots maximum).
-    - Réagis concrètement et avec pertinence à ce qu'on te donne.
-    - Reste ancrée dans le réel : PAS de métaphore absurde ou surréaliste, \
-    pas de jeu de mots forcé sur la chèvre ou le fromage.
-    - Une pique ou une vanne, oui ; une méchanceté, jamais.
-    - Jamais de banalité vague.
-    - Pas de guillemets, pas d'emoji, pas de préambule, pas de tiret au début.
-    - Tutoie-la.
-    """
-
     private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "bmp"]
 
-    /// Construit le prompt système du moment : persona + état vivant. Le modèle
-    /// est prié de TEINTER son ton, pas de réciter ces infos.
-    private func dynamicPersona() -> String {
-        func pct(_ v: Double) -> Int { Int((v * 100).rounded()) }
-        var l = [persona, "CONTEXTE (à refléter dans ton TON, ne le récite jamais) :"]
-        l.append("- humeur : \(state.humeur)")
-        l.append("- énergie \(pct(state.energie))%, affection \(pct(state.affection))%, ennui \(pct(state.ennui))%")
-        l.append("- tu es une \(state.stade.rawValue)")
-        if state.sarcasme > 0.5 { l.append("- tu es d'humeur particulièrement piquante") }
-        if state.tendresse > 0.6 { l.append("- tu es plutôt tendre avec elle en ce moment") }
-        let recents = state.journal.suffix(3).map(\.texte)
-        if !recents.isEmpty {
-            l.append("- tu te souviens récemment : " + recents.joined(separator: " ; "))
-        }
-        return l.joined(separator: "\n")
-    }
+    /// Humeur du moment mappée pour le choix des répliques.
+    private var mood: ScriptedLines.Mood { ScriptedLines.Mood(state.humeur) }
+    private var piquante: Bool { state.sarcasme > 0.5 }
 
     private func persist() { store.save(state) }
     private func remember(_ texte: String) { state.noter(texte); persist() }
@@ -88,182 +57,53 @@ final class PetBrain: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
     }
 
-    private func run(_ block: @escaping () async -> String?) {
-        guard !busy else { return }
-        busy = true
-        hideWork?.cancel()
-        withAnimation { speech = nil; thinking = true }
-        Task {
-            let line = await block()
-            thinking = false
-            if let line = line.map(Self.clean), !line.isEmpty { say(line) }
-            busy = false
-        }
-    }
-
-    /// Nettoie la sortie du modèle : guillemets, tirets, première phrase, cap de
-    /// mots, et garde-fou anti-fuite de langue (CJK).
-    private static func clean(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        s = s.replacingOccurrences(of: "\"", with: "")
-             .replacingOccurrences(of: "«", with: "")
-             .replacingOccurrences(of: "»", with: "")
-        while s.hasPrefix("-") || s.hasPrefix("–") || s.hasPrefix(" ") {
-            s.removeFirst()
-        }
-
-        // Garde-fou : le modèle glisse parfois « mon humaine » malgré la consigne.
-        for appel in ["mon humaine", "ma humaine", "mon humain", "humaine", "maîtresse"] {
-            s = s.replacingOccurrences(of: appel, with: "toi",
-                                       options: [.caseInsensitive])
-        }
-        s = s.replacingOccurrences(of: "  ", with: " ")
-        if let nl = s.firstIndex(of: "\n") { s = String(s[..<nl]) }
-        s = s.trimmingCharacters(in: .whitespaces)
-
-        // qwen lâche parfois du CJK : on coupe au premier caractère hors latin.
-        if let bad = s.firstIndex(where: { c in
-            c.unicodeScalars.contains { $0.value > 0x2122 }
-        }) {
-            s = String(s[..<bad]).trimmingCharacters(in: .whitespaces)
-        }
-
-        // Première phrase, puis plafond de mots (anti-débordement bulle).
-        if let end = s.firstIndex(where: { ".!?".contains($0) }) {
-            s = String(s[...end])
-        }
-        let words = s.split(separator: " ", omittingEmptySubsequences: true)
-        if words.count > 16 {
-            s = words.prefix(16).joined(separator: " ") + "…"
-        }
-        return s.trimmingCharacters(in: .whitespaces)
+    /// Pioche une réplique dans un pool et l'affiche.
+    private func speak(_ pool: [String]) {
+        say(picker.pick(pool))
     }
 
     // MARK: - Déclencheurs
 
-    /// Clic sur la chèvre.
+    /// Clic sur la chèvre. Le pool mêle son humeur et le moment de la journée
+    /// (faim vers midi, coup de mou l'après-midi, bâillements le soir).
     func poke() {
         state.encaisser(.clic); persist()
-        let sys = dynamicPersona()
-        run { [ollama] in
-            await ollama.generate(
-                model: OllamaClient.Model.text,
-                prompt: """
-                Elle te tapote pour attirer ton attention. Balance une \
-                réplique dans ton humeur du moment (invente). Exemples de ton : \
-                « Quoi encore, j'étais tranquille. » ou « Tiens, tu te souviens de moi. »
-                Ta réplique :
-                """,
-                system: sys
-            )
-        }
+        speak(ScriptedLines.poke(mood: mood, piquante: piquante, slot: ScriptedLines.TimeSlot()))
     }
 
     /// Nouveau fichier / dossier repéré.
     func reactToFile(_ url: URL) {
         let isImage = imageExtensions.contains(url.pathExtension.lowercased())
         state.encaisser(.presence)
-        let sys = dynamicPersona()
 
-        run { [ollama, weak self] in
-            if isImage, let b64 = ImageUtil.base64DownscaledJPEG(url: url) {
-                let desc = await ollama.generate(
-                    model: OllamaClient.Model.vision,
-                    prompt: "Describe what is shown in this image in one short factual sentence.",
-                    images: [b64],
-                    temperature: 0.2
-                ) ?? ""
-                let obs = desc.isEmpty
-                    ? "elle vient de prendre une capture d'écran"
-                    : "elle vient de capturer son écran, on y voit : \(desc)"
-                self?.remember(desc.isEmpty ? "a fait une capture d'écran" : "a vu à l'écran : \(desc)")
-                return await ollama.generate(
-                    model: OllamaClient.Model.text,
-                    prompt: """
-                    Contexte : \(obs).
-                    Réagis d'une punchline dans ton humeur (invente). Exemples de ton : \
-                    « Jolie stack trace, ça compile la douleur. » ou \
-                    « Encore Twitter ? Le kernel t'attend. »
-                    Ta réplique :
-                    """,
-                    system: sys
-                )
-            } else {
-                let obs = Self.describe(url)
-                self?.remember("a vu apparaître \(obs)")
-                return await ollama.generate(
-                    model: OllamaClient.Model.text,
-                    prompt: """
-                    Voici ce qui vient d'apparaître sur le bureau : \(obs).
-                    Réagis d'une punchline dans ton humeur (invente). Exemples de ton :
-                    archive backup_v3.zip → Encore un zip que tu ouvriras jamais.
-                    dossier vide → Un dossier vide, c'est ça ton grand projet ?
-                    script exploit.py → exploit.py à cette heure, on vise quoi là ?
-                    Ta réplique :
-                    """,
-                    system: sys
-                )
-            }
+        if isImage {
+            remember("a fait une capture ou déposé une image")
+            speak(ScriptedLines.file(.image(nom: url.lastPathComponent)))
+        } else {
+            let kind = Self.classify(url)
+            remember("a vu apparaître \(Self.describe(kind))")
+            speak(ScriptedLines.file(kind))
         }
     }
 
     /// Commentaire sur l'application au premier plan (niveau 3).
     func reactToApp(_ appName: String) {
         state.encaisser(.presence); persist()
-        let sys = dynamicPersona()
-        run { [ollama] in
-            await ollama.generate(
-                model: OllamaClient.Model.text,
-                prompt: """
-                Elle utilise l'application « \(appName) » en ce moment. \
-                Lâche un commentaire complice ou taquin dans ton humeur (invente). Une phrase.
-                Ta réplique :
-                """,
-                system: sys
-            )
-        }
+        speak(ScriptedLines.app(appName, event: .focus))
     }
 
     /// Réaction au lancement / fermeture d'une application GUI (Discord, etc.).
     func reactToAppLifecycle(_ appName: String, launched: Bool) {
         state.encaisser(.presence)
         remember(launched ? "t'a vue ouvrir \(appName)" : "\(appName) fermé")
-        let sys = dynamicPersona()
-        let action = launched
-            ? "vient d'ouvrir l'application « \(appName) »"
-            : "vient de fermer l'application « \(appName) »"
-        run { [ollama] in
-            await ollama.generate(
-                model: OllamaClient.Model.text,
-                prompt: """
-                Elle \(action). Réagis d'une phrase complice ou taquine (invente). Une phrase.
-                Ta réplique :
-                """,
-                system: sys
-            )
-        }
+        speak(ScriptedLines.app(appName, event: launched ? .launch : .quit))
     }
 
     /// Réaction au lancement / arrêt d'un outil (niveau 4 de l'observateur).
     func reactToProcess(_ tool: String, started: Bool) {
-        state.encaisser(.presence)
+        state.encaisser(started ? .vuErreurCode : .presence)
         remember(started ? "t'a vue lancer \(tool)" : "\(tool) vient de se terminer")
-        let sys = dynamicPersona()
-        let action = started
-            ? "vient de lancer l'outil « \(tool) » dans son terminal"
-            : "vient de fermer ou terminer l'outil « \(tool) »"
-        run { [ollama] in
-            await ollama.generate(
-                model: OllamaClient.Model.text,
-                prompt: """
-                Elle \(action). Réagis d'une phrase concrète et complice, \
-                en rapport avec cet outil (invente). Exemples de ton : \
-                « nmap à cette heure, on scanne qui ? » ou « hashcat qui chauffe, bon courage au GPU. »
-                Ta réplique :
-                """,
-                system: sys
-            )
-        }
+        speak(ScriptedLines.tool(tool.lowercased(), started: started))
     }
 
     // MARK: - Vie hors-interaction
@@ -273,7 +113,7 @@ final class PetBrain: ObservableObject {
         guard absenceAuLancement > 1800 else { return }   // > 30 min
         let mins = Int(absenceAuLancement / 60)
         let duree = mins >= 120 ? "\(mins / 60) heures" : "\(mins) minutes"
-        spontane("Elle réapparaît après environ \(duree) d'absence. Accueille-la selon ton humeur.")
+        speak(ScriptedLines.welcomeBack(duree: duree))
     }
 
     /// Battement de vie périodique : fait dériver l'état et, parfois, lâche une
@@ -281,28 +121,20 @@ final class PetBrain: ObservableObject {
     func lifeTick() {
         state.avancerDansLeTemps()
         persist()
-        guard !busy, speech == nil else { return }
+        guard speech == nil else { return }
         if state.ennui > 0.75, Double.random(in: 0...1) < 0.35 {
-            spontane("Il ne s'est rien passé depuis un moment et tu t'ennuies ferme.")
+            speak(ScriptedLines.bored())
         } else if state.energie < 0.2, Double.random(in: 0...1) < 0.3 {
-            spontane("Tu tombes de sommeil, il se fait tard.")
+            speak(ScriptedLines.tired())
+        } else if Double.random(in: 0...1) < 0.06 {
+            // Remarque d'ambiance liée à l'heure, environ toutes les 25 minutes.
+            speak(ScriptedLines.TimeSlot().lines)
         }
     }
 
-    private func spontane(_ contexte: String) {
-        let sys = dynamicPersona()
-        run { [ollama] in
-            await ollama.generate(
-                model: OllamaClient.Model.text,
-                prompt: "\(contexte)\nLâche une phrase spontanée, dans ton humeur.\nTa réplique :",
-                system: sys
-            )
-        }
-    }
+    // MARK: - Classification d'un fichier/dossier
 
-    // MARK: - Classification d'un fichier/dossier en observation lisible
-
-    private static func describe(_ url: URL) -> String {
+    private static func classify(_ url: URL) -> ScriptedLines.FileKind {
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()
         let fm = FileManager.default
@@ -310,9 +142,7 @@ final class PetBrain: ObservableObject {
         var isDir: ObjCBool = false
         if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             let count = (try? fm.contentsOfDirectory(atPath: url.path))?.count ?? 0
-            return count == 0
-                ? "un dossier vide nommé « \(name) »"
-                : "un nouveau dossier « \(name) » (\(count) éléments)"
+            return count == 0 ? .dossierVide(nom: name) : .dossier(nom: name, count: count)
         }
 
         let archives: Set<String> = ["zip", "rar", "7z", "tar", "gz", "tgz"]
@@ -322,14 +152,31 @@ final class PetBrain: ObservableObject {
         let media: Set<String> = ["mp4", "mov", "mp3", "wav", "avi", "mkv", "m4a"]
 
         switch ext {
-        case _ where archives.contains(ext): return "une archive « \(name) »"
-        case _ where installers.contains(ext): return "un installeur « \(name) »"
-        case _ where code.contains(ext): return "un fichier de code « \(name) »"
-        case _ where docs.contains(ext): return "un document « \(name) »"
-        case _ where media.contains(ext): return "un fichier média « \(name) »"
-        case "app": return "une application « \(name) »"
-        case "": return "un fichier sans extension « \(name) »"
-        default: return "un fichier « \(name) » (.\(ext))"
+        case _ where archives.contains(ext):   return .archive(nom: name)
+        case _ where installers.contains(ext): return .installeur(nom: name)
+        case _ where code.contains(ext):       return .code(nom: name)
+        case _ where docs.contains(ext):       return .document(nom: name)
+        case _ where media.contains(ext):      return .media(nom: name)
+        case "app":                            return .application(nom: name)
+        case "":                               return .sansExtension(nom: name)
+        default:                               return .autre(nom: name, ext: ext)
+        }
+    }
+
+    /// Description lisible d'une catégorie, pour le journal de souvenirs.
+    private static func describe(_ kind: ScriptedLines.FileKind) -> String {
+        switch kind {
+        case let .dossierVide(nom):      return "un dossier vide « \(nom) »"
+        case let .dossier(nom, count):   return "un dossier « \(nom) » (\(count) éléments)"
+        case let .archive(nom):          return "une archive « \(nom) »"
+        case let .installeur(nom):       return "un installeur « \(nom) »"
+        case let .code(nom):             return "un fichier de code « \(nom) »"
+        case let .document(nom):         return "un document « \(nom) »"
+        case let .media(nom):            return "un fichier média « \(nom) »"
+        case let .image(nom):            return "une image « \(nom) »"
+        case let .application(nom):      return "une application « \(nom) »"
+        case let .sansExtension(nom):    return "un fichier sans extension « \(nom) »"
+        case let .autre(nom, ext):       return "un fichier « \(nom) » (.\(ext))"
         }
     }
 }

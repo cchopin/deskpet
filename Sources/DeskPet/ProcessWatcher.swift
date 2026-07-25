@@ -30,8 +30,13 @@ final class ProcessWatcher {
         "aircrack-ng", "airodump-ng", "ncat", "responder", "bettercap", "wpscan",
         "dirb", "crackmapexec", "nuclei", "subfinder", "amass", "burpsuite",
         // Dev / IA
-        "claude", "docker", "dockerd",
+        "claude", "docker", "dockerd", "python3",
     ]
+
+    /// Outils qui vont et viennent sans arrêt : on espace beaucoup leurs
+    /// commentaires, sinon la chèvre parle en boucle.
+    private let bavards: Set<String> = ["python3", "docker", "dockerd", "claude"]
+    private let cooldownBavard: TimeInterval = 900
 
     func start() {
         let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -67,7 +72,8 @@ final class ProcessWatcher {
     private func fire(_ name: String, _ event: Event) {
         let key = "\(name)#\(event)"
         let now = Date()
-        if let last = lastFired[key], now.timeIntervalSince(last) < cooldown { return }
+        let delai = bavards.contains(name) ? cooldownBavard : cooldown
+        if let last = lastFired[key], now.timeIntervalSince(last) < delai { return }
         lastFired[key] = now
         DispatchQueue.main.async { [weak self] in self?.onEvent?(name, event) }
     }

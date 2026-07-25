@@ -1,10 +1,9 @@
 import Foundation
 
 /// « L'âme » de la chèvre : l'état persistant qui dérive avec le temps et les
-/// événements. C'est CET objet qu'on synchronisera entre Macs via iCloud (le
-/// cerveau — Ollama — reste local). Sérialisé en JSON.
-///
-/// Note : pas encore branché sur PetBrain — première brique du M5.
+/// événements. C'est CET objet qu'on synchronisera entre Macs via iCloud.
+/// Sérialisé en JSON. L'humeur et les traits qu'il expose teintent le choix des
+/// répliques scriptées (voir `ScriptedLines`).
 struct PetState: Codable {
 
     // MARK: Jauges court terme (0...1)
