@@ -54,15 +54,72 @@ swift build -c release
 .build/release/DeskPet
 ```
 
+> Le binaire lit ses sprites dans `DeskPet_DeskPet.bundle`, généré **à côté** de
+> lui dans `.build/release/`. Si tu déplaces l'exécutable ailleurs, emporte le
+> bundle avec lui et garde-les dans le même dossier, sinon l'app s'arrête net au
+> premier sprite.
+
+## Installer sur un autre Mac
+
+Le plus simple est de recompiler sur place — l'architecture est alors forcément
+la bonne et rien n'est mis en quarantaine par Gatekeeper :
+
+```sh
+git clone git@github.com:cchopin/deskpet.git && cd deskpet
+swift build -c release
+```
+
+Si tu préfères copier un binaire déjà compilé, prends `DeskPet` **et**
+`DeskPet_DeskPet.bundle`, puis lève la quarantaine à l'arrivée :
+
+```sh
+xattr -dr com.apple.quarantine DeskPet DeskPet_DeskPet.bundle
+```
+
+Un binaire compilé sur Apple Silicon ne tourne pas sur un Mac Intel. Pour un
+exécutable universel :
+
+```sh
+swift build -c release --arch arm64 --arch x86_64
+```
+
 ## Lancement au démarrage (optionnel)
 
-Un LaunchAgent (`~/Library/LaunchAgents/com.deskpet.plist`) pointant vers le
-binaire *release* le lance à l'ouverture de session :
+Un LaunchAgent lance la chèvre à l'ouverture de session. Depuis la racine du
+dépôt (le `$PWD` inscrit le bon chemin absolu, `~` n'est pas développé par
+launchd) :
+
+```sh
+cat > ~/Library/LaunchAgents/com.deskpet.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.deskpet</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PWD/.build/release/DeskPet</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+```
+
+Puis :
 
 ```sh
 launchctl load -w ~/Library/LaunchAgents/com.deskpet.plist   # activer
 launchctl unload ~/Library/LaunchAgents/com.deskpet.plist    # désactiver
 ```
+
+`KeepAlive` la relance si elle se ferme : pour l'arrêter vraiment, passe par
+`launchctl unload` plutôt que par `kill`. Après un `swift build` qui remplace le
+binaire, un `unload` suivi d'un `load -w` reprend la nouvelle version.
 
 ## État persistant
 
