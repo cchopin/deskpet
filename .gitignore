@@ -1,0 +1,17 @@
+# Build SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+
+# macOS
+.DS_Store
+
+# État runtime de la chèvre (perso, jamais versionné)
+state.json
+*.state.json
+
+# Divers
+*.swp
+*.log
